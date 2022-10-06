@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-#./3700ftp ls ftp://rojor:6EjXJ8bLZRrAhO9IBFwS@ftp.3700.network/
 import os
 import sys
 from os import path
