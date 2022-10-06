@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+
+#./3700ftp ls ftp://rojor:6EjXJ8bLZRrAhO9IBFwS@ftp.3700.network/
+import os
+import sys
+from os import path
+import re
+import socket
+from urllib.parse import urlparse
+import time
+
+# Dictionary that stores command line operations as keys with functions executing their purpose on the server as values
+operations = {"ls": lambda: pasv_command("LIST"),
+              "mkdir": lambda: send(control, "MKD", url.path),
+              "rm": lambda: send(control, "DELE", url.path),
+              "rmdir": lambda: send(control, "RMD", url.path),
+              "cp": lambda: pasv_command(move_command),
+              "mv": lambda: pasv_command(move_command)
+              }
+
+
+# Sends messages to the server
+def send(channel, command, param):
+    channel.send((command + " " + param + "\r\n").encode())
+
+
+# Receives a complete message from the server and returns it
+def receive(channel):
+    msg = channel.recv(1024)
+    while not msg.decode().endswith('\r\n'):
+        msg += channel.recv(1024)
+
+    return msg.decode().strip("\r\n")
+
+
+# Collecting command-line arguments
+delete_original = False
+operation = sys.argv[1]
+if len(sys.argv) < 4:
+    url = urlparse(sys.argv[2])
+    print(url)
+else:
+    if path.exists(sys.argv[2]):
+        url = urlparse(sys.argv[3])
+        f = open(sys.argv[2], "rb")
+        move_command = "STOR"
+    else:
+        url = urlparse(sys.argv[2])
+        f = open(sys.argv[3], "wb")
+        move_command = "RETR"
+    if operation == "mv":
+        delete_original = True
+
+
+# Connect the control channel socket to the FTP server and create the data channel
+control = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+control.connect((url.hostname, 21))
+data = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+
+# Open a data channel that is PASV and return input command
+# used for commands that need Passive mode to operate
+def pasv_command(cmd):
+    # Parse out ip and port from server message
+    send(control, "PASV", "")
+    address_msg = receive(control)
+    print(address_msg)
+    address = re.sub(r"[).]", "", address_msg.split("(")[1]).split(",")
+    ip = "%s.%s.%s.%s" % (address[0], address[1], address[2], address[3])
+    port = (int(address[4]) << 8) + (int(address[5]))
+
+    data.connect((ip, port))
+    send(control, cmd, url.path)
+    if cmd == "LIST":
+        print(receive(data))
+
+    if cmd == "STOR":  # Procedure for uploading a file to the server
+        file_data = f.read()
+        data.send(file_data)
+        f.close()
+        if delete_original:
+            os.remove(sys.argv[2])
+
+    if cmd == "RETR":  # Procedure for downloading a file from the server
+        size = int(re.sub(r"[).]", "", receive(control).split("(")[1]).split(" ")[0])
+        time.sleep(1)
+        msg = data.recv(size)  # Receive Data from server
+        if delete_original:
+            operations["rm"]()
+            receive(control)
+
+        f.write(msg)
+        f.close()
+
+    return data.close
+
+
+# Send initial messages to establish connection to FTP server
+print(receive(control))
+send(control, "USER", url.username)
+print(receive(control))
+send(control, "PASS", url.password)
+
+print(receive(control))
+send(control, "TYPE", "I")
+print(receive(control))
+send(control, "MODE", "S")
+print(receive(control))
+send(control, "STRU", "F")
+print(receive(control))
+
+# Executes specified operation by sending appropriate command/data to the server
+operations[operation]()
+print(receive(control))
+
+# Quit the Program
+send(control, "QUIT", "")
+control.close()
+print("PROGRAM FINISHED")
